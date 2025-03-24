@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>길리랩 기술 블로그</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+    <!-- Mermaid 스크립트 이동 - 페이지 로드 후 실행되도록 변경 -->
+    <script defer src="https://cdn.jsdelivr.net/npm/mermaid@11.5.0/dist/mermaid.min.js"></script>
+    <script>
+      // 직접 전역 초기화를 통해 mermaid가 항상 준비되도록 함
+      window.addEventListener('load', function() {
+        if (typeof mermaid !== 'undefined') {
+          console.log('Mermaid 초기화 실행됨');
+          mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose'
+          });
+        } else {
+          console.error('Mermaid 라이브러리가 로드되지 않았습니다');
+        }
+      });
+    </script>
+  </body>
+</html> 
