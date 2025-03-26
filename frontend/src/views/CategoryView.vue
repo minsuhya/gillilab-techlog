@@ -166,6 +166,8 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { usePostsStore } from '../store/posts'
 import CategoryTree from '../components/CategoryTree.vue'
+import CategoryList from '../components/CategoryList.vue'
+import api from '../utils/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -270,34 +272,18 @@ async function loadCategoryData() {
       }
       
       // 루트 카테고리의 게시물 로드
-      const response = await fetch('/api/posts/category/')
-      
-      if (!response.ok) {
-        throw new Error('게시물을 로드하는데 실패했습니다')
-      }
-      
-      posts.value = await response.json()
+      const response = await api.get('/api/posts/category/')
+      posts.value = response.data
       return
     }
     
     // 카테고리 API 호출하여 데이터 가져오기
-    const categoryResponse = await fetch(`/api/categories/${categoryPath}`);
-    
-    if (!categoryResponse.ok) {
-      throw new Error(`카테고리를 찾을 수 없습니다: ${categoryPath}`);
-    }
-    
-    // API에서 카테고리 정보 가져오기
-    currentCategory.value = await categoryResponse.json();
+    const categoryResponse = await api.get(`/api/categories/${categoryPath}`);
+    currentCategory.value = categoryResponse.data;
     
     // 카테고리의 게시물 로드
-    const postsResponse = await fetch(`/api/posts/category/${categoryPath}`)
-    
-    if (!postsResponse.ok) {
-      throw new Error('게시물을 로드하는데 실패했습니다')
-    }
-    
-    posts.value = await postsResponse.json()
+    const postsResponse = await api.get(`/api/posts/category/${categoryPath}`)
+    posts.value = postsResponse.data
   } catch (err) {
     console.error('카테고리 데이터 로드 실패:', err)
     error.value = err.message || '카테고리 데이터를 불러오는 중 오류가 발생했습니다'

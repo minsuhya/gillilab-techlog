@@ -133,6 +133,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { usePostsStore } from '../store/posts'
 import CategoryTree from '../components/CategoryTree.vue'
+import api from '../utils/api'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -166,8 +167,8 @@ async function loadData() {
     await postsStore.fetchCategories()
     
     // 최근 게시물 로드
-    const response = await fetch('/api/posts/recent?limit=10')
-    recentPosts.value = await response.json()
+    const response = await api.get('/api/posts/recent?limit=10')
+    recentPosts.value = response.data
     
     // 통계 데이터 계산
     calculateStats()
@@ -216,7 +217,7 @@ async function refreshCategories() {
   loading.value = true
   try {
     // 캐시 재구축 요청
-    await fetch('/api/categories?rebuild=true')
+    await api.get('/api/categories?rebuild=true')
     // 카테고리 다시 로드
     await postsStore.fetchCategories()
     // 통계 업데이트

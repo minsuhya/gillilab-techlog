@@ -1,13 +1,26 @@
 from typing import List, Optional
-
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import Response
+from feedgen.feed import FeedGenerator
+import os
 
 from app.core.auth import (UserInDB, get_current_active_user,
                            get_current_admin_user)
 from app.models.post import Post, PostList
 from app.services.content_service import content_service
+from app.core.config import settings
 
 router = APIRouter()
+
+
+@router.get("/health")
+async def health_check():
+    """서버 상태 확인"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone(timedelta(hours=9))).isoformat()
+    }
 
 
 @router.get("/posts/recent", response_model=List[Post])
@@ -111,3 +124,59 @@ async def refresh_posts_cache(current_user: UserInDB = Depends(get_current_admin
     """포스트 캐시 수동 갱신 (관리자용)"""
     await content_service.refresh_content_cache()
     return {"status": "success", "message": "콘텐츠 캐시가 갱신되었습니다."}
+
+
+@router.get("/feed/rss")
+async def get_rss_feed():
+    """RSS 피드 생성"""
+    try:
+        fg = FeedGenerator()
+        fg.title('Gillilab Blog')
+        fg.description('Gillilab Tech Blog')
+        fg.link(href='https://gillilab.com')
+        fg.language('ko')
+        
+        # 한국 시간대 설정
+        kst = timezone(timedelta(hours=9))
+        fg.lastBuildDate(datetime.now(kst))
+        
+        # 최근 포스트 가져오기
+        posts = content_service.get_recent_posts(limit=20)
+        
+        for post in posts:
+            fe = fg.add_entry()
+            fe.title(post['title'])
+            fe.link(href=f"https://gillilab.com/post/{post['id']}")
+            fe.description(post.get('description', post['title']))
+            fe.content(post['content'])
+            
+            # 파일의 생성 및 수정 시간 사용
+            file_path = content_service.get_post_file_path(post['id'])
+            if file_path and os.path.exists(file_path):
+                file_stat = os.stat(file_path)
+                created_at = datetime.fromtimestamp(file_stat.st_ctime, tz=kst)
+                updated_at = datetime.fromtimestamp(file_stat.st_mtime, tz=kst)
+                fe.published(created_at)
+                fe.updated(updated_at)
+            else:
+                # 파일 정보가 없는 경우 현재 시간 사용
+                current_time = datetime.now(kst)
+                fe.published(current_time)
+                fe.updated(current_time)
+            
+            if post.get('thumbnail_url'):
+                fe.enclosure(url=post['thumbnail_url'], type='image/jpeg')
+        
+        # RSS 피드 생성 시 인코딩 설정
+        rss_content = fg.rss_str(pretty=True, encoding='utf-8')
+        
+        # Response 헤더에 인코딩 정보 추가
+        return Response(
+            content=rss_content,
+            media_type='application/rss+xml; charset=utf-8',
+            headers={
+                'Content-Type': 'application/rss+xml; charset=utf-8'
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"RSS 피드 생성 중 오류 발생: {str(e)}")

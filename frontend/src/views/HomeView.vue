@@ -74,7 +74,9 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { usePostsStore } from '../store/posts'
+import api from '../utils/api'
 import CategoryTree from '../components/CategoryTree.vue'
 
 const postsStore = usePostsStore()
@@ -94,8 +96,8 @@ onMounted(async () => {
     }
     
     // 최근 포스트 로드
-    const response = await fetch('/api/posts/recent?limit=5')
-    recentPosts.value = await response.json()
+    const response = await api.get('/api/posts/recent')
+    recentPosts.value = response.data
   } catch (error) {
     console.error('데이터 로드 실패:', error)
   } finally {

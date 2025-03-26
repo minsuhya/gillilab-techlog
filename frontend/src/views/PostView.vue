@@ -3,6 +3,12 @@
     <!-- 좌측 카테고리 트리 -->
     <div class="col-span-3">
       <CategoryTree />
+      <!-- 세로형 광고 추가 -->
+      <AdDisplay
+        ad-slot="YOUR_VERTICAL_AD_SLOT"
+        position="vertical"
+        format="vertical"
+      />
     </div>
     
     <!-- 중앙 콘텐츠 -->
@@ -53,8 +59,20 @@
           <h1 class="text-3xl font-bold text-gray-900">{{ post.title }}</h1>
         </div>
         
+        <!-- 상단 광고 -->
+        <AdDisplay
+          ad-slot="YOUR_HORIZONTAL_AD_SLOT_1"
+          position="horizontal"
+        />
+        
         <!-- 포스트 본문 -->
         <div class="prose max-w-none" v-html="renderedContent"></div>
+        
+        <!-- 하단 광고 -->
+        <AdDisplay
+          ad-slot="YOUR_HORIZONTAL_AD_SLOT_2"
+          position="horizontal"
+        />
         
         <!-- 하단 네비게이션 - 시각적으로 개선된 UI -->
         <div class="mt-12 pt-8 border-t border-gray-200">
@@ -142,6 +160,13 @@
             </li>
           </ul>
         </div>
+        
+        <!-- 우측 광고 -->
+        <AdDisplay
+          ad-slot="YOUR_VERTICAL_AD_SLOT_2"
+          position="vertical"
+          format="vertical"
+        />
       </div>
     </div>
   </div>
@@ -153,10 +178,14 @@ import { useRoute, RouterLink } from 'vue-router'
 import { usePostsStore } from '../store/posts'
 import CategoryTree from '../components/CategoryTree.vue'
 import CategoryList from '../components/CategoryList.vue'
+import AdDisplay from '../components/AdDisplay.vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/atom-one-dark.css'
+import { trackPostView } from '../utils/analytics'
+import { trackNaverPostView } from '../utils/naverAnalytics'
+import api from '../utils/api'
 
 const route = useRoute()
 const postsStore = usePostsStore()
@@ -507,13 +536,11 @@ async function loadCategoryPosts() {
   
   try {
     // 현재 포스트의 카테고리에 속한 포스트 목록 가져오기
-    const response = await fetch(`/api/posts/category/${post.value.category}`);
+    const response = await api.get(`/api/posts/category/${post.value.category}`);
     
-    if (response.ok) {
-      const categoryPosts = await response.json();
-      
+    if (response.data) {
       // 현재 포스트를 제외한 최대 5개의 동일 카테고리 포스트 표시
-      categorySiblings.value = categoryPosts
+      categorySiblings.value = response.data
         .filter(p => p.path !== post.value.path)
         .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
         .slice(0, 5);
@@ -550,13 +577,13 @@ watch(
       console.log('라우트 변경으로 로드할 포스트 경로:', postPath);
       
       // 포스트 데이터 가져오기
-      const response = await fetch(`/api/posts/${postPath}`);
+      const response = await api.get(`/api/posts/${postPath}`);
       
-      if (!response.ok) {
+      if (!response.data) {
         throw new Error(`포스트를 찾을 수 없습니다: ${postPath}`);
       }
       
-      post.value = await response.json();
+      post.value = response.data;
       
       // 마크다운을 HTML로 변환하고 mermaid 다이어그램 처리
       if (post.value && post.value.content) {
@@ -635,40 +662,25 @@ async function fetchAdjacentPosts(category, currentPath) {
     const apiUrl = `/api/posts/${encodedCategory}/adjacent?current=${encodedPath}`;
     console.log('API 요청 URL:', apiUrl);
     
-    const response = await fetch(apiUrl);
+    const response = await api.get(apiUrl);
     
-    if (!response.ok) {
-      console.error(`이전/다음 포스트 API 오류: ${response.status}`);
-      try {
-        const errorText = await response.text();
-        console.error('오류 응답 내용:', errorText);
-      } catch (e) {
-        // 오류 응답 읽기 실패 시 무시
+    if (response.data) {
+      // 응답 데이터 확인 및 할당
+      previousPost.value = response.data.previous || null;
+      nextPost.value = response.data.next || null;
+      
+      // 확인 로깅
+      if (previousPost.value) {
+        console.log('이전 포스트 설정:', previousPost.value.title);
+      } else {
+        console.log('이전 포스트 없음');
       }
       
-      previousPost.value = null;
-      nextPost.value = null;
-      return;
-    }
-    
-    const data = await response.json();
-    console.log('이전/다음 포스트 데이터:', data);
-    
-    // 응답 데이터 확인 및 할당
-    previousPost.value = data.previous || null;
-    nextPost.value = data.next || null;
-    
-    // 확인 로깅
-    if (previousPost.value) {
-      console.log('이전 포스트 설정:', previousPost.value.title);
-    } else {
-      console.log('이전 포스트 없음');
-    }
-    
-    if (nextPost.value) {
-      console.log('다음 포스트 설정:', nextPost.value.title);
-    } else {
-      console.log('다음 포스트 없음');
+      if (nextPost.value) {
+        console.log('다음 포스트 설정:', nextPost.value.title);
+      } else {
+        console.log('다음 포스트 없음');
+      }
     }
   } catch (err) {
     console.error('이전/다음 포스트 로드 실패:', err);
@@ -694,6 +706,97 @@ function formatDate(dateString) {
     day: 'numeric'
   }).format(date)
 }
+
+// SEO 메타 태그 업데이트 함수
+const updateMetaTags = (postData) => {
+  if (!postData) return
+
+  // 타이틀 업데이트
+  document.title = `${postData.title} - 길리랩 기술 블로그`
+
+  // 메타 태그 업데이트
+  const metaTags = {
+    description: postData.description || postData.title,
+    'og:title': postData.title,
+    'og:description': postData.description || postData.title,
+    'og:type': 'article',
+    'og:url': `https://gillilab.com/post/${postData.id}`,
+    'og:image': postData.thumbnail_url || 'https://gillilab.com/logo.png',
+    'twitter:title': postData.title,
+    'twitter:description': postData.description || postData.title,
+    'twitter:image': postData.thumbnail_url || 'https://gillilab.com/logo.png'
+  }
+
+  Object.entries(metaTags).forEach(([name, content]) => {
+    let meta = document.querySelector(`meta[property="${name}"]`) ||
+               document.querySelector(`meta[name="${name}"]`)
+    
+    if (!meta) {
+      meta = document.createElement('meta')
+      if (name.startsWith('og:')) {
+        meta.setAttribute('property', name)
+      } else {
+        meta.setAttribute('name', name)
+      }
+      document.head.appendChild(meta)
+    }
+    meta.setAttribute('content', content)
+  })
+
+  // 구조화된 데이터 업데이트
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    'mainEntityOfPage': {
+      '@type': 'WebPage',
+      '@id': `https://gillilab.com/post/${postData.id}`
+    },
+    'headline': postData.title,
+    'description': postData.description || postData.title,
+    'image': postData.thumbnail_url || 'https://gillilab.com/logo.png',
+    'author': {
+      '@type': 'Person',
+      'name': postData.author || 'Gillilab'
+    },
+    'publisher': {
+      '@type': 'Organization',
+      'name': 'Gillilab',
+      'logo': {
+        '@type': 'ImageObject',
+        'url': 'https://gillilab.com/logo.png'
+      }
+    },
+    'datePublished': postData.created_at,
+    'dateModified': postData.updated_at || postData.created_at
+  }
+
+  let scriptTag = document.querySelector('script[type="application/ld+json"]')
+  if (!scriptTag) {
+    scriptTag = document.createElement('script')
+    scriptTag.type = 'application/ld+json'
+    document.head.appendChild(scriptTag)
+  }
+  scriptTag.textContent = JSON.stringify(schema)
+}
+
+// 포스트 데이터가 변경될 때마다 메타 태그 업데이트 및 애널리틱스 추적
+watch(() => post.value, (newPost) => {
+  if (newPost) {
+    updateMetaTags(newPost)
+    // 포스트 조회 추적 (Google Analytics)
+    trackPostView(
+      newPost.id,
+      newPost.title,
+      newPost.category
+    )
+    // 포스트 조회 추적 (네이버 서치어드바이저)
+    trackNaverPostView(
+      newPost.id,
+      newPost.title,
+      newPost.category
+    )
+  }
+}, { immediate: true })
 </script>
 
 <style>

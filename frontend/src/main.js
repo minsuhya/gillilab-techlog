@@ -1,19 +1,22 @@
+import './assets/main.css'
 import { createApp } from 'vue'
-import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
-import './assets/main.css'
+import { createPinia } from 'pinia'
+import { validateConfig } from './config'
+import DOMPurify from 'dompurify'
 
 // DOMPurify 및 Marked 설정
-import * as DOMPurify from 'dompurify'
 import { marked } from 'marked'
+
+// 환경변수 유효성 검사
+validateConfig()
 
 // 앱 생성
 const app = createApp(App)
 
 // Pinia 상태 관리 설정
-const pinia = createPinia()
-app.use(pinia)
+app.use(createPinia())
 
 // 라우터 설정
 app.use(router)

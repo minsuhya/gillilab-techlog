@@ -335,6 +335,24 @@ class ContentService:
         
         return posts[:limit]
 
+    def get_post_file_path(self, post_id: str) -> Optional[Path]:
+        """포스트 ID로 파일 경로 반환"""
+        try:
+            # post_id가 이미 전체 경로인 경우
+            if post_id in content_cache["posts"]:
+                post = content_cache["posts"][post_id]
+                return self.data_dir / f"{post['path']}.md"
+            
+            # post_id가 파일명만인 경우
+            for post in content_cache["posts"].values():
+                if post["id"] == post_id:
+                    return self.data_dir / f"{post['path']}.md"
+            
+            return None
+        except Exception as e:
+            print(f"포스트 파일 경로 조회 중 오류 발생: {e}")
+            return None
+
 
 # 싱글톤 인스턴스
 content_service = ContentService()

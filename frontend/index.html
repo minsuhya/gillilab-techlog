@@ -5,7 +5,75 @@
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
-    <title>길리랩 기술 블로그</title>
+    <title><%= VITE_SITE_TITLE %></title>
+    
+    <!-- 네이버 서치어드바이저 -->
+    <script type="text/javascript" src="https://wcs.naver.net/wcslog.js"></script>
+    <script type="text/javascript">
+      if(!wcs_add) var wcs_add = {};
+      wcs_add["wa"] = "<%= VITE_NAVER_SITE_ID %>";
+      if(window.wcs) {
+        wcs_do();
+      }
+    </script>
+    
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=<%= VITE_GA_MEASUREMENT_ID %>"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', '<%= VITE_GA_MEASUREMENT_ID %>');
+    </script>
+    
+    <!-- Google AdSense -->
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=<%= VITE_ADSENSE_PUBLISHER_ID %>" crossorigin="anonymous"></script>
+    
+    <!-- 기본 메타 태그 -->
+    <meta name="description" content="<%= VITE_SITE_DESCRIPTION %>" />
+    <meta name="keywords" content="길리랩, 기술블로그, 개발, 인공지능, 데이터분석" />
+    <meta name="author" content="<%= VITE_SITE_AUTHOR %>" />
+    <meta name="robots" content="index, follow" />
+    
+    <!-- Open Graph 태그 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="<%= VITE_SITE_TITLE %>" />
+    <meta property="og:description" content="<%= VITE_SITE_DESCRIPTION %>" />
+    <meta property="og:image" content="<%= VITE_SITE_IMAGE %>" />
+    <meta property="og:url" content="<%= VITE_SITE_URL %>" />
+    <meta property="og:site_name" content="<%= VITE_SITE_TITLE %>" />
+    <meta property="og:locale" content="ko_KR" />
+    
+    <!-- Twitter 카드 태그 -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="<%= VITE_SITE_TITLE %>" />
+    <meta name="twitter:description" content="<%= VITE_SITE_DESCRIPTION %>" />
+    <meta name="twitter:image" content="<%= VITE_SITE_IMAGE %>" />
+    
+    <!-- RSS 피드 링크 -->
+    <link rel="alternate" type="application/rss+xml" title="<%= VITE_SITE_TITLE %> RSS Feed" href="/rss.xml" />
+    <link rel="alternate" type="application/atom+xml" title="<%= VITE_SITE_TITLE %> Atom Feed" href="/atom.xml" />
+    <link rel="alternate" type="application/json" title="<%= VITE_SITE_TITLE %> JSON Feed" href="/feed.json" />
+    
+    <!-- 구조화된 데이터 -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Blog",
+        "name": "<%= VITE_SITE_TITLE %>",
+        "description": "<%= VITE_SITE_DESCRIPTION %>",
+        "url": "<%= VITE_SITE_URL %>",
+        "image": "<%= VITE_SITE_IMAGE %>",
+        "publisher": {
+          "@type": "Organization",
+          "name": "<%= VITE_SITE_AUTHOR %>",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "<%= VITE_SITE_IMAGE %>"
+          }
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

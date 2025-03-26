@@ -5,6 +5,8 @@ import AdminView from '../views/AdminView.vue'
 import PostView from '../views/PostView.vue'
 import CategoryView from '../views/CategoryView.vue'
 import { useAuthStore } from '../store/auth'
+import { trackPageView } from '../utils/analytics'
+import { trackNaverPageView } from '../utils/naverAnalytics'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -80,6 +82,12 @@ router.beforeEach((to, from, next) => {
     // 인증이 필요하지 않은 라우트
     next()
   }
+})
+
+// 페이지 변경 추적
+router.afterEach((to, from) => {
+  trackPageView(to.fullPath, to.meta.title)
+  trackNaverPageView(to.fullPath, to.meta.title)
 })
 
 export default router 
