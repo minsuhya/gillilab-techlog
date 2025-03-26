@@ -45,6 +45,7 @@ const generateRSSFeed = async (apiUrl) => {
 async function generateSitemap(apiUrl) {
   try {
     const baseUrl = SITE_URL
+    console.log('API URL:', apiUrl)
     
     // API에서 카테고리와 포스트 정보 가져오기
     const [categoriesResponse, postsResponse] = await Promise.all([
@@ -162,7 +163,8 @@ export default defineConfig(({ command, mode }) => {
         '/api': {
           target: process.env.VITE_API_URL || 'http://localhost:8000',
           changeOrigin: true,
-          secure: false
+          secure: false,
+          rewrite: (path) => path.replace(/^\/api/, '')
         }
       },
       historyApiFallback: {
@@ -178,10 +180,21 @@ export default defineConfig(({ command, mode }) => {
         output: {
           manualChunks: {
             'vendor': ['vue', 'vue-router', 'pinia']
-          }
+          },
+          chunkFileNames: 'assets/js/[name]-[hash].js',
+          entryFileNames: 'assets/js/[name]-[hash].js',
+          assetFileNames: 'assets/[ext]/[name]-[hash].[ext]'
         }
       },
-      chunkSizeWarningLimit: 1000, // 청크 크기 경고 한계를 1000KB로 설정
+      chunkSizeWarningLimit: 1000,
+      minify: 'terser',
+      terserOptions: {
+        compress: {
+          drop_console: true,
+          drop_debugger: true
+        }
+      },
+      sourcemap: mode === 'development',
       define: {
         'process.env.VITE_SITE_TITLE': JSON.stringify(env.VITE_SITE_TITLE),
         'process.env.VITE_SITE_DESCRIPTION': JSON.stringify(env.VITE_SITE_DESCRIPTION),

@@ -106,6 +106,9 @@ class ContentService:
         self.data_dir = Path(settings.DATA_DIR)
         self.observer = None
         self.event_handler = None
+        self._cache_lock = asyncio.Lock()  # 캐시 동시성 제어를 위한 락 추가
+        self._last_refresh = 0  # 마지막 갱신 시간
+        self._refresh_interval = 300  # 5분마다 갱신
         
     async def start_file_watcher(self):
         """파일 시스템 변경 감지 시작"""
@@ -125,7 +128,7 @@ class ContentService:
             print("파일 변경 감지 중지")
     
     def _get_post_metadata(self, file_path: Path) -> dict:
-        """마크다운 파일에서 메타데이터 추출"""
+        """마크다운 파일에서 메타데이터 추출 (최적화된 버전)"""
         metadata = {
             "id": str(file_path).replace(str(self.data_dir), "").lstrip("/").replace(".md", ""),
             "title": file_path.stem,
@@ -134,70 +137,39 @@ class ContentService:
             "updated_at": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
         }
         
-        # 파일 내용 파싱하여 메타데이터 추출
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 
-                # 첫 번째 줄이 # 로 시작하면 제목으로 사용
-                lines = content.split('\n')
-                if lines and lines[0].startswith('# '):
-                    metadata["title"] = lines[0][2:].strip()
+                # 제목 추출 최적화
+                title_match = re.search(r'^\s*#\s+(.+)$', content, re.MULTILINE)
+                if title_match:
+                    metadata["title"] = title_match.group(1).strip()
                 
-                # 설명 추출 개선 (첫 번째 의미 있는 문단)
+                # 설명 추출 최적화
                 description = ""
-                
-                # mtoc 섹션을 건너뛰기 위한 변수들
-                in_mtoc = False
-                mtoc_end_found = False
                 content_started = False
+                mtoc_end_found = False
                 
-                for i, line in enumerate(lines[1:], 1):
+                for line in content.split('\n'):
                     line = line.strip()
                     
-                    # mtoc 시작 태그 감지
-                    if line.startswith('<!-- mtoc-start -->'):
-                        in_mtoc = True
-                        continue
-                    
-                    # mtoc 종료 태그 감지
                     if line.startswith('<!-- mtoc-end -->'):
-                        in_mtoc = False
                         mtoc_end_found = True
                         continue
                     
-                    # mtoc 부분 건너뛰기
-                    if in_mtoc:
+                    if not mtoc_end_found:
                         continue
                     
-                    # 빈 줄이 아니고 #로 시작하지 않는 첫 의미 있는 텍스트를 찾음
-                    if not content_started and mtoc_end_found and line and not line.startswith('#') and not line.startswith('<!--'):
+                    if not content_started and line and not line.startswith('#') and not line.startswith('<!--'):
                         content_started = True
-                
-                    # 의미 있는 내용이 시작된 후, 문단을 모아서 첫 문단을 형성
+                    
                     if content_started:
-                        if line:  # 내용이 있는 줄
+                        if line:
                             description += line + " "
-                        elif description:  # 빈 줄이고 이미 설명이 있으면 종료
+                        elif description:
                             break
                 
-                # mtoc가 없는 경우, 제목 다음의 첫 번째 의미 있는 문단을 찾음
-                if not mtoc_end_found and not description:
-                    for i, line in enumerate(lines[1:], 1):
-                        line = line.strip()
-                        
-                        # 빈 줄이 아니고 #로 시작하지 않는 첫 텍스트 줄 찾기
-                        if not content_started and line and not line.startswith('#') and not line.startswith('<!--'):
-                            content_started = True
-                        
-                        # 의미 있는 내용이 시작된 후, 문단을 모아서 첫 문단을 형성
-                        if content_started:
-                            if line:  # 내용이 있는 줄
-                                description += line + " "
-                            elif description:  # 빈 줄이고 이미 설명이 있으면 종료
-                                break
-                
-                # 설명이 너무 길면 적절한 길이로 자름 (200자 정도)
                 if description:
                     description = description.strip()
                     if len(description) > 200:
@@ -205,12 +177,11 @@ class ContentService:
                 
                 metadata["description"] = description
                 metadata["content"] = content
-                
-                # 콘텐츠의 HTML 변환
                 metadata["content_html"] = markdown.markdown(
                     content, 
                     extensions=['fenced_code', 'tables', 'toc']
                 )
+                
         except Exception as e:
             print(f"메타데이터 파싱 오류 ({file_path}): {e}")
         
@@ -258,33 +229,43 @@ class ContentService:
         return result
     
     async def refresh_content_cache(self):
-        """콘텐츠 캐시 갱신"""
-        print("콘텐츠 캐시 갱신 시작...")
+        """콘텐츠 캐시 갱신 (최적화된 버전)"""
+        current_time = time.time()
         
-        try:
-            # 카테고리 구조 스캔
-            content_cache["categories"] = self._scan_directory(self.data_dir)
+        # 캐시 락 획득
+        async with self._cache_lock:
+            # 마지막 갱신으로부터 충분한 시간이 지나지 않았다면 스킵
+            if current_time - self._last_refresh < self._refresh_interval:
+                return
             
-            # 캐시에 있는 포스트 중 파일이 삭제된 경우 제거
-            existing_paths = set()
-            for item in Path(self.data_dir).glob("**/*.md"):
-                relative_path = str(item).replace(str(self.data_dir), "").lstrip("/")
-                post_id = relative_path.replace(".md", "")
-                existing_paths.add(post_id)
+            print("콘텐츠 캐시 갱신 시작...")
             
-            # 존재하지 않는 포스트 제거
-            for post_id in list(content_cache["posts"].keys()):
-                if post_id not in existing_paths:
-                    del content_cache["posts"][post_id]
-                    if post_id in file_hashes:
-                        del file_hashes[post_id]
-            
-            # 마지막 갱신 시간 업데이트
-            content_cache["last_updated"] = datetime.now().isoformat()
-            
-            print(f"콘텐츠 캐시 갱신 완료 (카테고리: {len(content_cache['categories'])}, 포스트: {len(content_cache['posts'])})")
-        except Exception as e:
-            print(f"콘텐츠 캐시 갱신 오류: {e}")
+            try:
+                # 카테고리 구조 스캔
+                content_cache["categories"] = self._scan_directory(self.data_dir)
+                
+                # 캐시에 있는 포스트 중 파일이 삭제된 경우 제거
+                existing_paths = set()
+                for item in Path(self.data_dir).glob("**/*.md"):
+                    relative_path = str(item).replace(str(self.data_dir), "").lstrip("/")
+                    post_id = relative_path.replace(".md", "")
+                    existing_paths.add(post_id)
+                
+                # 존재하지 않는 포스트 제거
+                for post_id in list(content_cache["posts"].keys()):
+                    if post_id not in existing_paths:
+                        del content_cache["posts"][post_id]
+                        if post_id in file_hashes:
+                            del file_hashes[post_id]
+                
+                # 마지막 갱신 시간 업데이트
+                content_cache["last_updated"] = datetime.now().isoformat()
+                self._last_refresh = current_time
+                
+                print(f"콘텐츠 캐시 갱신 완료 (카테고리: {len(content_cache['categories'])}, 포스트: {len(content_cache['posts'])})")
+            except Exception as e:
+                print(f"콘텐츠 캐시 갱신 오류: {e}")
+                raise
     
     def get_categories(self) -> List[dict]:
         """모든 카테고리 목록 반환"""
@@ -315,25 +296,17 @@ class ContentService:
         return result
     
     def get_post_by_path(self, post_path: str) -> Optional[dict]:
-        """경로로 포스트 찾기"""
+        """경로로 포스트 찾기 (최적화된 버전)"""
         if post_path in content_cache["posts"]:
             return content_cache["posts"][post_path]
         
-        # 경로 정규화 시도
         normalized_path = post_path.lstrip("/")
-        if normalized_path in content_cache["posts"]:
-            return content_cache["posts"][normalized_path]
-        
-        return None
+        return content_cache["posts"].get(normalized_path)
     
     def get_recent_posts(self, limit: int = 5) -> List[dict]:
-        """최근 포스트 목록 반환"""
+        """최근 포스트 목록 반환 (최적화된 버전)"""
         posts = list(content_cache["posts"].values())
-        
-        # 업데이트 시간 기준으로 정렬
-        posts.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        
-        return posts[:limit]
+        return sorted(posts, key=lambda x: x.get("updated_at", ""), reverse=True)[:limit]
 
     def get_post_file_path(self, post_id: str) -> Optional[Path]:
         """포스트 ID로 파일 경로 반환"""
@@ -352,6 +325,26 @@ class ContentService:
         except Exception as e:
             print(f"포스트 파일 경로 조회 중 오류 발생: {e}")
             return None
+
+    def get_all_posts(self) -> List[Dict]:
+        """
+        모든 포스트의 기본 정보를 반환합니다.
+        sitemap.xml 생성에 필요한 최소한의 데이터만 포함합니다.
+        """
+        try:
+            # 캐시된 포스트 목록에서 필요한 필드만 추출
+            posts = []
+            for post in content_cache["posts"].values():
+                posts.append({
+                    "id": post["id"],
+                    "path": post["path"],
+                    "updated_at": post["updated_at"],
+                    "created_at": post.get("created_at", post["updated_at"])
+                })
+            return posts
+        except Exception as e:
+            logger.error(f"포스트 목록 조회 중 오류 발생: {str(e)}")
+            raise
 
 
 # 싱글톤 인스턴스

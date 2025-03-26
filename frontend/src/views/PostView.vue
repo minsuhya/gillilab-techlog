@@ -91,6 +91,7 @@
                   <span class="font-semibold">이전 글</span>
                 </div>
                 <div class="font-medium text-gray-900 hover:text-primary line-clamp-2">{{ previousPost.title }}</div>
+                <div class="text-xs text-gray-500 mt-1">{{ formatDate(previousPost.updated_at) }}</div>
               </RouterLink>
               <div v-else class="p-4 bg-gray-50 rounded-lg border border-gray-200 text-gray-400 flex items-center justify-center h-[88px]">
                 <span class="text-sm">이전 글이 없습니다</span>
@@ -110,7 +111,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
-                <div class="text-gray-900 font-xs hover:text-primary text-right line-clamp-2">{{ nextPost.title }}</div>
+                <div class="text-gray-900 font-medium hover:text-primary text-right line-clamp-2">{{ nextPost.title }}</div>
+                <div class="text-xs text-gray-500 mt-1 text-right">{{ formatDate(nextPost.updated_at) }}</div>
               </RouterLink>
               <div v-else class="p-4 bg-gray-50 rounded-lg border border-gray-200 text-gray-400 flex items-center justify-center h-[88px]">
                 <span class="text-sm">다음 글이 없습니다</span>

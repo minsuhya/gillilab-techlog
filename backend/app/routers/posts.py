@@ -1,182 +1,370 @@
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi.responses import Response as FastAPIResponse
 from feedgen.feed import FeedGenerator
 import os
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import status
 
 from app.core.auth import (UserInDB, get_current_active_user,
                            get_current_admin_user)
-from app.models.post import Post, PostList
-from app.services.content_service import content_service
+from app.models.post import Post, PostList, PostCreate, PostUpdate
+from app.services.content_service import content_service, ContentService
 from app.core.config import settings
+from app.core.security import verify_token
+from app.core.auth import get_current_user
+from app.models.user import User
+from app.core.logger import logger
+import json
+import pytz
 
 router = APIRouter()
+security = HTTPBearer()
 
 
 @router.get("/health")
 async def health_check():
     """서버 상태 확인"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone(timedelta(hours=9))).isoformat()
-    }
+    return JSONResponse(
+        content={
+            "status": "healthy",
+            "timestamp": datetime.now(timezone(timedelta(hours=9))).isoformat(),
+            "version": "v0.1"
+        }
+    )
+
+
+@router.get("/posts", response_model=List[Post])
+async def get_all_posts(
+    content_service: ContentService = Depends()
+):
+    """
+    모든 포스트의 기본 정보를 반환합니다.
+    sitemap.xml 생성에 필요한 최소한의 데이터만 포함합니다.
+    """
+    try:
+        # 먼저 캐시 갱신
+        await content_service.refresh_content_cache()
+        # 그 다음 포스트 목록 반환
+        posts = content_service.get_all_posts()
+        return JSONResponse(
+            content=jsonable_encoder(posts),
+            headers={
+                "Cache-Control": "public, max-age=3600",  # 1시간 캐시
+                "Content-Type": "application/json"
+            }
+        )
+    except Exception as e:
+        logger.error(f"포스트 목록 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트 목록을 가져오는 중 오류가 발생했습니다."
+        )
 
 
 @router.get("/posts/recent", response_model=List[Post])
-async def get_recent_posts(limit: int = Query(5, ge=1, le=20)):
-    """최근 포스트 목록 가져오기"""
-    return content_service.get_recent_posts(limit=limit)
+async def get_recent_posts(
+    limit: int = 5,
+    content_service: ContentService = Depends()
+):
+    """
+    최근 포스트 목록을 반환합니다.
+    """
+    try:
+        posts = content_service.get_recent_posts(limit)
+        return JSONResponse(
+            content=jsonable_encoder(posts),
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "Content-Type": "application/json"
+            }
+        )
+    except Exception as e:
+        logger.error(f"최근 포스트 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="최근 포스트를 가져오는 중 오류가 발생했습니다."
+        )
+
+
+@router.get("/posts/{category_path:path}/adjacent")
+async def get_adjacent_posts(
+    category_path: str = Path(..., description="카테고리 경로"),
+    current: str = Query(..., description="현재 포스트 경로"),
+    content_service: ContentService = Depends()
+):
+    """이전 및 다음 포스트 가져오기"""
+    try:
+        # URL 디코딩
+        decoded_category = category_path.replace('%2F', '/')
+        decoded_current = current.replace('%2F', '/')
+        
+        # 카테고리 경로가 현재 포스트의 상위 카테고리인지 확인
+        if decoded_current.startswith(f"{decoded_category}/"):
+            target_category = decoded_category
+        else:
+            # 현재 포스트의 카테고리 경로 추출
+            target_category = decoded_current.rsplit('/', 1)[0]
+        
+        # 해당 카테고리의 모든 포스트 가져오기
+        posts = content_service.get_posts_by_category(target_category)
+        
+        # 파일명의 4자리 숫자 prefix로 정렬
+        posts.sort(key=lambda x: x.get("path", "").split("/")[-1][:4])
+        
+        # 현재 포스트 인덱스 찾기
+        current_index = -1
+        for i, post in enumerate(posts):
+            if post.get("path") == decoded_current:
+                current_index = i
+                break
+        
+        result = {"previous": None, "next": None}
+        
+        # 이전 포스트 (더 최신 포스트)
+        if current_index > 0:
+            prev_post = posts[current_index - 1]
+            result["previous"] = {
+                "id": prev_post["id"],
+                "path": prev_post["path"],
+                "title": prev_post["title"],
+                "category": prev_post["category"],
+                "updated_at": prev_post["updated_at"]
+            }
+        
+        # 다음 포스트 (더 이전 포스트)
+        if current_index != -1 and current_index < len(posts) - 1:
+            next_post = posts[current_index + 1]
+            result["next"] = {
+                "id": next_post["id"],
+                "path": next_post["path"],
+                "title": next_post["title"],
+                "category": next_post["category"],
+                "updated_at": next_post["updated_at"]
+            }
+        
+        return JSONResponse(
+            content=jsonable_encoder(result),
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "Content-Type": "application/json"
+            }
+        )
+    except Exception as e:
+        logger.error(f"이전/다음 포스트 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="이전/다음 포스트를 가져오는 중 오류가 발생했습니다."
+        )
 
 
 @router.get("/posts/category/{category_path:path}", response_model=List[Post])
 async def get_posts_by_category(
-    category_path: str = Path(..., description="카테고리 경로")
+    category_path: str,
+    content_service: ContentService = Depends()
 ):
-    """특정 카테고리의 포스트 목록 가져오기"""
-    posts = content_service.get_posts_by_category(category_path)
-
-    if not posts:
-        # 오류가 아닌 빈 목록 반환
-        return []
-
-    return posts
-
-
-@router.get("/posts/{category_path:path}/adjacent", response_model=dict)
-async def get_adjacent_posts(
-    category_path: str = Path(..., description="카테고리 경로"),
-    current: str = Query(..., description="현재 포스트 경로"),
-):
-    """이전 및 다음 포스트 가져오기"""
-    print(f"이전/다음 포스트 요청: 카테고리={category_path}, 현재={current}")
-
-    # 카테고리 경로가 현재 포스트의 상위 카테고리인지 확인
-    if current.startswith(f"{category_path}/"):
-        print(f"현재 포스트 {current}는 카테고리 {category_path}의 하위 경로입니다.")
-    elif "/" in current:
-        # 현재 포스트의 카테고리 경로 추출
-        post_category = current.rsplit("/", 1)[0]
-        print(f"현재 포스트의 실제 카테고리: {post_category}")
-        if post_category != category_path:
-            print(f"카테고리 불일치 감지: 요청={category_path}, 실제={post_category}")
-            # 포스트의 실제 카테고리로 가져오기
-            category_path = post_category
-
-    # 해당 카테고리의 모든 포스트 가져오기
-    posts = content_service.get_posts_by_category(category_path)
-    print(f"카테고리 {category_path}에서 {len(posts)}개의 포스트를 찾았습니다.")
-
-    # 시간순으로 정렬 (최신순)
-    posts.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-
-    # 현재 포스트 인덱스 찾기
-    current_index = -1
-    for i, post in enumerate(posts):
-        if post.get("path") == current:
-            current_index = i
-            break
-
-    print(f"현재 포스트 '{current}'의 인덱스: {current_index}")
-
-    result = {"previous": None, "next": None}
-
-    # 이전 포스트 (더 최신 포스트)
-    if current_index > 0:
-        prev_post = posts[current_index - 1]
-        result["previous"] = {
-            "path": prev_post["path"],
-            "title": prev_post["title"],
-            "category": prev_post["category"],
-        }
-        print(f"이전 포스트 설정: {prev_post['title']}")
-
-    # 다음 포스트 (더 이전 포스트)
-    if current_index != -1 and current_index < len(posts) - 1:
-        next_post = posts[current_index + 1]
-        result["next"] = {
-            "path": next_post["path"],
-            "title": next_post["title"],
-            "category": next_post["category"],
-        }
-        print(f"다음 포스트 설정: {next_post['title']}")
-
-    print("반환 결과:", result)
-    return result
+    """
+    특정 카테고리의 포스트 목록을 반환합니다.
+    """
+    try:
+        posts = content_service.get_posts_by_category(category_path)
+        return JSONResponse(
+            content=jsonable_encoder(posts),
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "Content-Type": "application/json"
+            }
+        )
+    except Exception as e:
+        logger.error(f"카테고리별 포스트 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="카테고리별 포스트를 가져오는 중 오류가 발생했습니다."
+        )
 
 
 @router.get("/posts/{post_path:path}", response_model=Post)
-async def get_post(post_path: str = Path(..., description="포스트 경로")):
-    """특정 포스트 가져오기"""
-    post = content_service.get_post_by_path(post_path)
-
-    if not post:
-        raise HTTPException(
-            status_code=404, detail=f"포스트를 찾을 수 없습니다: {post_path}"
+async def get_post_by_path(
+    post_path: str,
+    content_service: ContentService = Depends()
+):
+    """
+    특정 포스트의 상세 정보를 반환합니다.
+    """
+    try:
+        post = content_service.get_post_by_path(post_path)
+        if not post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="포스트를 찾을 수 없습니다."
+            )
+        return JSONResponse(
+            content=jsonable_encoder(post),
+            headers={
+                "Cache-Control": "public, max-age=300",
+                "Content-Type": "application/json"
+            }
         )
-
-    return post
-
-
-# 관리자 전용 API
-@router.post("/admin/posts/refresh", status_code=200)
-async def refresh_posts_cache(current_user: UserInDB = Depends(get_current_admin_user)):
-    """포스트 캐시 수동 갱신 (관리자용)"""
-    await content_service.refresh_content_cache()
-    return {"status": "success", "message": "콘텐츠 캐시가 갱신되었습니다."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"포스트 조회 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트를 가져오는 중 오류가 발생했습니다."
+        )
 
 
 @router.get("/feed/rss")
-async def get_rss_feed():
-    """RSS 피드 생성"""
+async def get_rss_feed(
+    content_service: ContentService = Depends()
+):
+    """
+    RSS 피드를 생성합니다.
+    """
     try:
         fg = FeedGenerator()
-        fg.title('Gillilab Blog')
-        fg.description('Gillilab Tech Blog')
+        fg.title('GilliLab Blog')
+        fg.description('GilliLab Blog RSS Feed')
         fg.link(href='https://gillilab.com')
         fg.language('ko')
         
-        # 한국 시간대 설정
-        kst = timezone(timedelta(hours=9))
-        fg.lastBuildDate(datetime.now(kst))
-        
-        # 최근 포스트 가져오기
-        posts = content_service.get_recent_posts(limit=20)
+        # 최근 20개의 포스트 가져오기
+        posts = content_service.get_recent_posts(20)
         
         for post in posts:
             fe = fg.add_entry()
             fe.title(post['title'])
             fe.link(href=f"https://gillilab.com/post/{post['id']}")
-            fe.description(post.get('description', post['title']))
-            fe.content(post['content'])
+            fe.description(post.get('description', ''))
+            fe.content(post.get('content', ''))
             
-            # 파일의 생성 및 수정 시간 사용
+            # 파일 생성/수정 시간 가져오기
             file_path = content_service.get_post_file_path(post['id'])
-            if file_path and os.path.exists(file_path):
-                file_stat = os.stat(file_path)
-                created_at = datetime.fromtimestamp(file_stat.st_ctime, tz=kst)
-                updated_at = datetime.fromtimestamp(file_stat.st_mtime, tz=kst)
-                fe.published(created_at)
-                fe.updated(updated_at)
+            if file_path and file_path.exists():
+                stat = os.stat(file_path)
+                fe.published(datetime.fromtimestamp(stat.st_ctime, tz=pytz.timezone('Asia/Seoul')))
+                fe.updated(datetime.fromtimestamp(stat.st_mtime, tz=pytz.timezone('Asia/Seoul')))
             else:
-                # 파일 정보가 없는 경우 현재 시간 사용
-                current_time = datetime.now(kst)
-                fe.published(current_time)
-                fe.updated(current_time)
+                now = datetime.now(pytz.timezone('Asia/Seoul'))
+                fe.published(now)
+                fe.updated(now)
             
-            if post.get('thumbnail_url'):
-                fe.enclosure(url=post['thumbnail_url'], type='image/jpeg')
+            # 썸네일이 있는 경우 추가
+            if post.get('thumbnail'):
+                fe.enclosure(url=post['thumbnail'], type='image/jpeg')
         
-        # RSS 피드 생성 시 인코딩 설정
-        rss_content = fg.rss_str(pretty=True, encoding='utf-8')
-        
-        # Response 헤더에 인코딩 정보 추가
-        return Response(
-            content=rss_content,
+        return FastAPIResponse(
+            content=fg.rss_str(encoding='utf-8'),
             media_type='application/rss+xml; charset=utf-8',
             headers={
                 'Content-Type': 'application/rss+xml; charset=utf-8'
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"RSS 피드 생성 중 오류 발생: {str(e)}")
+        logger.error(f"RSS 피드 생성 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"RSS 피드 생성 중 오류 발생: {str(e)}"
+        )
+
+
+# 관리자 전용 엔드포인트 (인증 필요)
+@router.post("/admin/posts", response_model=Post)
+async def create_post(
+    post: PostCreate,
+    content_service: ContentService = Depends(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    새로운 포스트를 생성합니다.
+    """
+    try:
+        created_post = content_service.create_post(post)
+        return JSONResponse(
+            content=jsonable_encoder(created_post),
+            status_code=status.HTTP_201_CREATED
+        )
+    except Exception as e:
+        logger.error(f"포스트 생성 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트 생성 중 오류가 발생했습니다."
+        )
+
+
+@router.put("/admin/posts/{post_id}", response_model=Post)
+async def update_post(
+    post_id: str,
+    post: PostUpdate,
+    content_service: ContentService = Depends(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    기존 포스트를 수정합니다.
+    """
+    try:
+        updated_post = content_service.update_post(post_id, post)
+        if not updated_post:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="포스트를 찾을 수 없습니다."
+            )
+        return JSONResponse(content=jsonable_encoder(updated_post))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"포스트 수정 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트 수정 중 오류가 발생했습니다."
+        )
+
+
+@router.delete("/admin/posts/{post_id}")
+async def delete_post(
+    post_id: str,
+    content_service: ContentService = Depends(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    포스트를 삭제합니다.
+    """
+    try:
+        if not content_service.delete_post(post_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="포스트를 찾을 수 없습니다."
+            )
+        return {"message": "포스트가 삭제되었습니다."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"포스트 삭제 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트 삭제 중 오류가 발생했습니다."
+        )
+
+
+@router.post("/admin/posts/refresh")
+async def refresh_posts(
+    content_service: ContentService = Depends(),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    포스트 캐시를 수동으로 갱신합니다.
+    """
+    try:
+        await content_service.refresh_content_cache()
+        return {"message": "포스트 캐시가 갱신되었습니다."}
+    except Exception as e:
+        logger.error(f"포스트 캐시 갱신 중 오류 발생: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="포스트 캐시 갱신 중 오류가 발생했습니다."
+        )
