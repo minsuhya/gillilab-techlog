@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+Allow: /post/
+Allow: /category/
+Allow: /rss.xml
+Allow: /atom.xml
+Allow: /feed.json
+Allow: /sitemap.xml
+
+Disallow: /api/
+Disallow: /admin/
+Disallow: /private/
+
+Sitemap: https://gillilab.com/sitemap.xml 
