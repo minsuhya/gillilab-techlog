@@ -1,5 +1,17 @@
 ---
 services:
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    ports:
+      - "8081:80"
+    networks:
+      - techlog-net
+    logging:
+      options:
+        max-size: "20m"  
+        max-file: "1"
   backend:
     build:
       context: ./backend
