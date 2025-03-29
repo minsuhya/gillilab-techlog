@@ -5,7 +5,7 @@ services:
     volumes:
       - ./frontend/dist:/usr/share/nginx/html:ro
     ports:
-      - "8081:80"
+      - "8082:80"
     networks:
       - techlog-net
     logging:
